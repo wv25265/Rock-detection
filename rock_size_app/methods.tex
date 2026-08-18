@@ -1,0 +1,171 @@
+% =====================================================================
+%  Rock Size Measurement -- for the UoB `dissertation' template.
+%
+%  PLACEMENT: this is a \section, so \input{methods} it INSIDE a
+%  \chapter (e.g. the Execution chapter of main.tex).
+%
+%  PREAMBLE: the dissertation class already loads graphicx, amsmath and
+%  amssymb, so you only need to add TikZ. Put these two lines just before
+%  \begin{document} in main.tex:
+%
+%      \usepackage{tikz}
+%      \usetikzlibrary{arrows.meta, positioning, fit}
+%
+%  BIBLIOGRAPHY: the four \cite keys used below
+%  (garrido2014aruco, yolo11, kirillov2023sam, zhang2023mobilesam)
+%  are defined in references.bib -- make sure main.tex ends with
+%  \bibliography{references}  (the class already sets \bibliographystyle).
+% =====================================================================
+
+\section{Rock Size Measurement}
+\label{sec:measurement}
+
+\subsection{Overview}
+The size of each rock is recovered in centimetres from a single hand-held image,
+using a planar reference marker and without any camera calibration. The pipeline
+has four stages (Fig.~\ref{fig:pipeline}): (A) recovering the ground-plane
+homography from the marker, (B) detecting the rocks, (C) segmenting their
+contours, and (D) measuring each contour in metric units.
+
+% ---------------------------------------------------------------------
+%  Figure 1 -- pipeline flowchart
+% ---------------------------------------------------------------------
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={rectangle, draw, thin, minimum width=52mm,
+              minimum height=8mm, align=center},
+  term/.style={rectangle, rounded corners=3mm, draw, thin,
+               minimum width=40mm, minimum height=7mm, align=center},
+  arr/.style={-{Latex[length=2mm]}, thin},
+  darr/.style={-{Latex[length=2mm]}, thin, dashed},
+  node distance=5mm
+]
+  \node[term] (img)                 {Field image with marker};
+  \node[box, below=of img]  (cal)   {\textbf{A}\; Detect ArUco marker;\\
+                                      estimate homography $H$, scale $k$};
+  \node[box, below=of cal]  (det)   {\textbf{B}\; YOLO detection;\\
+                                      exclude marker, merge split boxes};
+  \node[box, below=of det]  (seg)   {\textbf{C}\; SAM segmentation;\\
+                                      de-duplicate masks};
+  \node[box, below=of seg]  (warp)  {\textbf{D}\; Warp rock contour by $H$};
+  \node[box, below=of warp] (fer)   {Maximum Feret diameter $d$};
+  \node[box, below=of fer]  (size)  {$L = d/k$\quad (cm)};
+  \node[box, below=of size] (cls)   {Size class (small / medium / large)};
+
+  \draw[arr] (img)  -- (cal);
+  \draw[arr] (cal)  -- (det);
+  \draw[arr] (det)  -- (seg);
+  \draw[arr] (seg)  -- (warp);
+  \draw[arr] (warp) -- (fer);
+  \draw[arr] (fer)  -- (size);
+  \draw[arr] (size) -- (cls);
+  % calibration supplies H, k to the measurement stage
+  \draw[darr] (cal.east) to[out=0, in=0] (warp.east);
+\end{tikzpicture}
+\caption{Measurement pipeline. Stage~A recovers the ground-plane homography
+$H$ and scale $k$ from the marker; stages~B--C localise and segment each rock;
+stage~D warps the rock contour by $H$ and reads its size in centimetres. The
+dashed arrow shows calibration feeding the measurement stage, either per image
+or once for a fixed camera rig and reused for marker-free photos.}
+\label{fig:pipeline}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Ground-plane calibration}
+\label{sec:calibration}
+The method rests on a single geometric assumption: the reference marker and the
+rocks lie on the same ground plane. Because a plane imaged by a pinhole camera is
+related to any rectified view by a projective homography, the effects of camera
+height, viewing angle and focal length are identical for every point on that
+plane and cancel out; no intrinsic or extrinsic camera parameters are required.
+
+A square ArUco marker~\cite{garrido2014aruco} (dictionary \texttt{DICT\_4X4\_50},
+id~0) is located in the
+greyscale image, with detection made robust through a three-stage cascade---raw,
+CLAHE contrast-enhanced, then upsampled---and sub-pixel corner refinement. Its
+four corners $p_i$ are mapped to a fronto-parallel target plane in which the
+marker is a square of side $s = \mathrm{marker\_cm}\cdot k$, where the plane scale
+$k = 40~\mathrm{px\,cm^{-1}}$ is fixed by construction. We solve for the
+homography $H$ satisfying
+\begin{equation}
+  q_i \sim H\,p_i, \qquad
+  q_i \in \{(0,0),\,(s,0),\,(s,s),\,(0,s)\},
+  \label{eq:homography}
+\end{equation}
+which yields a mapping from source pixels to metric ground coordinates in which
+one centimetre is exactly $k$ pixels everywhere. Two operating modes use this
+result. In the \emph{per-image} mode a marker is present in every photo and $H$,
+$k$ are recomputed each time. In the \emph{calibrate-once} mode a fixed camera
+rig is calibrated from one marker photo; $H$ and $k$ are stored and reused for
+subsequent marker-free images, valid only while the camera pose remains
+unchanged.
+
+% ---------------------------------------------------------------------
+\subsection{Rock detection and box cleaning}
+\label{sec:detection}
+A YOLO detector~\cite{yolo11} proposes candidate rock bounding boxes. Two corrections follow.
+First, the marker itself can be detected as a rock; any candidate whose
+intersection-over-union with the marker bounding box exceeds $0.3$ is discarded
+(skipped in the calibrate-once mode, where no marker is present). Second, the
+detector occasionally splits one rock across several boxes; overlapping or
+mutually contained boxes are iteratively merged into their union until the set is
+stable, using an IoU threshold of $0.3$ and a containment threshold of $0.4$.
+This prevents both double-counting and under-estimation of size.
+
+% ---------------------------------------------------------------------
+\subsection{Contour segmentation}
+\label{sec:segmentation}
+Each cleaned box is passed as a prompt to a Segment Anything model
+(SAM)~\cite{kirillov2023sam}, in its lightweight MobileSAM
+variant~\cite{zhang2023mobilesam}, which
+returns a pixel-level mask that follows the true rock boundary far more closely
+than the rectangular box. Because neighbouring prompts can produce masks of the
+same rock, masks are de-duplicated: two are merged when their intersection
+exceeds half the area of the smaller. When segmentation is disabled, the
+rectangular detection box is used as a faster, lower-accuracy fallback.
+
+% ---------------------------------------------------------------------
+\subsection{Size measurement}
+\label{sec:size}
+For each rock, the largest external contour is extracted and its pixel points $c$
+are warped into the metric ground plane,
+\begin{equation}
+  c' = H\,c .
+  \label{eq:warp}
+\end{equation}
+The characteristic size is the maximum Feret (calliper) diameter---the largest
+distance between any two points of the contour's convex hull---normalised by the
+plane scale:
+\begin{equation}
+  L = \frac{\displaystyle\max_{i,j}\,\lVert h_i - h_j\rVert}{k}\quad[\mathrm{cm}],
+  \label{eq:feret}
+\end{equation}
+where $\{h_i\}$ are the warped hull points. This longest-span measure is more
+faithful to the true maximum diameter than the long side of a minimum-area
+rectangle. Each rock is then assigned a size class from $L$: small
+($<10~\mathrm{cm}$), medium ($10$--$20~\mathrm{cm}$), or large
+($\geq 20~\mathrm{cm}$).
+
+% ---------------------------------------------------------------------
+\subsection{Assumptions and limitations}
+\label{sec:limitations}
+\begin{enumerate}
+  \item \textbf{Rock-height bias.} The homography is exact only for points on the
+        ground plane. A rock has thickness, so its upper surface projects to a
+        displaced position and its measured size is systematically
+        over-estimated. This is an intrinsic bound of single-marker monocular
+        measurement and cannot be removed without depth information.
+  \item \textbf{Coplanarity.} Uneven terrain, or a marker not lying flush with
+        the ground, violates the single-plane assumption and degrades accuracy.
+  \item \textbf{Projected metric.} $L$ is the longest diameter of the rock's
+        outline projected onto the ground plane, not its true three-dimensional
+        long axis.
+  \item \textbf{Segmentation quality.} Under- or over-segmentation of the mask
+        propagates directly into $L$.
+  \item \textbf{Reference error.} An incorrect measured marker size, or
+        corner-localisation error, scales proportionally into every result.
+  \item \textbf{Pose drift (calibrate-once mode).} Any change in camera height,
+        angle, position or zoom silently invalidates the stored $H$ and $k$.
+\end{enumerate}
