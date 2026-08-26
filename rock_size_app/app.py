@@ -1,4 +1,3 @@
-"""Gradio UI for rock size measurement. Marker DICT_4X4_50, id=0."""
 import os, glob, cv2, numpy as np, gradio as gr
 from functools import lru_cache
 
@@ -21,8 +20,8 @@ DEFAULT_MODEL = next((m for m in DETECTORS if "yolo11" in m and "seg" not in m),
                      DETECTORS[0] if DETECTORS else "")
 
 BUCKET_COLOR = {
-    "small(5-10)":  (0, 200, 0),
-    "medium(10-20)": (0, 165, 255),
+    "small(<5)":    (0, 200, 0),
+    "medium(5-20)": (0, 165, 255),
     "large(20+)":   (0, 0, 255),
 }
 
@@ -47,10 +46,10 @@ def calibrate(image_rgb, marker_cm):
     try:
         pts = detect_marker(gray)
     except Exception:
-        return "❌ No ArUco marker detected. Use a clear DICT_4X4_50 marker photo."
+        return "No ArUco marker detected. Use a clear DICT_4X4_50 marker photo."
     H, k, px_side = marker_H(pts, float(marker_cm))
     save_calibration(CALIB_PATH, H, k, marker_cm=float(marker_cm), px_side=px_side)
-    return (f"✅ Calibrated & saved to {CALIB_PATH}.\n"
+    return (f"Calibrated & saved to {CALIB_PATH}.\n"
             f"marker ≈{px_side:.0f}px = {marker_cm}cm (≈{px_side/float(marker_cm):.1f}px/cm)\n"
             "Now tick 'Use saved calibration' and measure marker-free photos taken "
             "from the SAME fixed camera pose.")
@@ -128,7 +127,7 @@ def measure(image_rgb, weights, marker_cm, conf, imgsz, use_sam, use_saved_calib
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
         rows.append([i + 1, f"{L:.1f}", b])
 
-    status.append("Size buckets: small 5-10cm / medium 10-20cm / large 20+cm")
+    status.append("Size buckets: small <5cm / medium 5-20cm / large 20+cm")
     return cv2.cvtColor(annot, cv2.COLOR_BGR2RGB), rows, "\n".join(status)
 
 

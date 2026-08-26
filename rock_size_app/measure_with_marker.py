@@ -1,11 +1,3 @@
-"""Measure rock size from an ArUco marker. The marker and rock share the ground
-plane, so camera height/angle/focal length cancel out. Marker corners give a
-homography H and a scale k (px/cm); rock contours warped by H are measured in cm.
-
-  python measure_with_marker.py <image> --marker_cm 15.0 --weights rock_yolo11.s_best.pt
-
-marker: DICT_4X4_50, id=0.
-"""
 import argparse, json, cv2, numpy as np
 
 ARUCO_DICT = cv2.aruco.DICT_4X4_50
@@ -159,7 +151,7 @@ def rock_size_cm(mask, H, k):
 
 
 def bucket(L):
-    return "small(5-10)" if L < 10 else "medium(10-20)" if L < 20 else "large(20+)"
+    return "small(<5)" if L < 5 else "medium(5-20)" if L < 20 else "large(20+)"
 
 
 def main():
