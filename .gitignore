@@ -218,3 +218,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 rock_dataset_split.zip
+
+# macOS
+.DS_Store
